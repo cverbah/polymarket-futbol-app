@@ -12,3 +12,12 @@ model:
   red_card_opponent_multiplier: 1.25
   lambda_home_bounds: [0.05, 6.0]
   lambda_away_bounds: [0.05, 4.0]
+
+polymarket:
+  gamma_base_url: "https://gamma-api.polymarket.com"
+  world_cup_tag_id: 102232
+  match_slug_prefix: "fifwc-"
+  request_timeout_seconds: 15
+  list_cache_ttl_seconds: 120
+  max_spread: 0.06
+  min_liquidity: 500
