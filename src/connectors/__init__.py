@@ -1,0 +1,1 @@
+"""Conectores externos (read-only)."""
