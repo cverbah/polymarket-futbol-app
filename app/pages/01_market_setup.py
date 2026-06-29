@@ -8,6 +8,7 @@ Mercado. Nada de matematica inline: todo vive en src/models/* y src/connectors/*
 """
 import os
 import sys
+from datetime import datetime
 
 # --- bootstrap de sys.path (archivo en app/pages/ -> subir DOS niveles) -----
 _ROOT = os.path.abspath(
@@ -42,7 +43,10 @@ def _load_match_list():
 
 @st.cache_data(ttl=_LIST_TTL, show_spinner="Cargando mercados del partido...")
 def _load_match_markets(slug: str):
-    return pm.get_match_markets(slug)
+    # Devuelve tambien el instante del fetch real. Como cache_data cachea el
+    # valor de retorno, el timestamp queda "congelado" junto con los datos:
+    # en cache-hit refleja cuando se trajeron, y solo cambia al refrescar.
+    return pm.get_match_markets(slug), datetime.now()
 
 
 st.title("🎯 Market Setup")
@@ -85,7 +89,7 @@ with col_sel:
 
 # --- Carga de mercados del partido elegido ---------------------------------
 try:
-    mm = _load_match_markets(selected.slug)
+    mm, fetched_at = _load_match_markets(selected.slug)
 except pm.PolymarketError as exc:
     st.error(f"No se pudieron cargar los mercados del partido: {exc}")
     st.stop()
@@ -95,8 +99,19 @@ away_team = mm.summary.away_team
 match_name = f"{home_team} vs {away_team}"
 
 st.divider()
-st.subheader(f"📊 {match_name}")
-st.caption(f"Inicio: {mm.summary.start_date[:16]}  ·  slug: `{mm.summary.slug}`")
+head_l, head_r = st.columns([4, 1])
+with head_l:
+    st.subheader(f"📊 {match_name}")
+with head_r:
+    st.write("")
+    if st.button("🔄 Actualizar precios", key="setup_refresh_prices_btn"):
+        # Refresca SOLO los mercados del partido (no la lista) y recalibra.
+        _load_match_markets.clear()
+        st.rerun()
+st.caption(
+    f"Inicio: {mm.summary.start_date[:16]}  ·  slug: `{mm.summary.slug}`  ·  "
+    f"Última actualización: {fetched_at:%H:%M:%S}"
+)
 
 # --- Precios 1X2 con spread y liquidez por mercado (senal confiable) -------
 st.markdown("### Precios 1X2 (mercado)")
