@@ -25,3 +25,7 @@ data/backtests/*
 .DS_Store
 .vscode/
 .idea/
+
+# Artefactos de pruebas en navegador
+.playwright-mcp/
+*.png
