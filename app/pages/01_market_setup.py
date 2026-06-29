@@ -1,7 +1,10 @@
-"""Market Setup: precios → calibrar → outputs.
+"""Market Setup: selector de partido del Mundial -> Polymarket -> calibrar -> analitica.
 
-Página delgada: lee inputs, llama al motor (calibration) y a state, y renderiza.
-Nada de matemática inline (vive en src/models/* y src/dashboard/*).
+Pagina delgada y SIN inputs numericos manuales. El usuario elige un partido del
+Mundial 2026 desde un selector poblado en vivo desde Polymarket; la pagina lee
+precios (1X2 + O/U + BTTS), calibra el modelo, guarda el resultado en sesion
+(compatible con Live Match) y despliega el catalogo analitico mas Modelo vs
+Mercado. Nada de matematica inline: todo vive en src/models/* y src/connectors/*.
 """
 import os
 import sys
@@ -16,198 +19,337 @@ if _ROOT not in sys.path:
 import plotly.graph_objects as go
 import streamlit as st
 
+from src.connectors import polymarket as pm
 from src.dashboard import state
-from src.models import calibration, dixon_coles, poisson
+from src.models import analytics, calibration, dixon_coles, poisson
 from src.utils.config import load_config
-from src.utils.validation import calibration_warnings
 
 st.set_page_config(page_title="Market Setup", page_icon="🎯")
 
 cfg = load_config()
+pm_cfg = load_config(section="polymarket")
+_LIST_TTL = int(pm_cfg.get("list_cache_ttl_seconds", 120))
+
+
+# --- Carga cacheada desde Polymarket --------------------------------------
+# Las funciones cacheadas llaman a pm.* por atributo de modulo, para que un
+# patch sobre pm.list_world_cup_matches / pm.get_match_markets tenga efecto
+# despues de st.cache_data.clear() (ver tests AppTest).
+@st.cache_data(ttl=_LIST_TTL, show_spinner="Cargando partidos del Mundial...")
+def _load_match_list():
+    return pm.list_world_cup_matches()
+
+
+@st.cache_data(ttl=_LIST_TTL, show_spinner="Cargando mercados del partido...")
+def _load_match_markets(slug: str):
+    return pm.get_match_markets(slug)
+
 
 st.title("🎯 Market Setup")
-st.caption("Ingresa precios, elige modelo y calibra los lambdas del partido.")
-
-# --- Inputs: partido y equipos --------------------------------------------
-st.subheader("Partido")
-match_name = st.text_input(
-    "Nombre del partido", value="Argentina vs Cabo Verde", key="setup_match_name"
+st.caption(
+    "Elige un partido del Mundial 2026. Los precios se leen en vivo desde "
+    "Polymarket; el modelo se calibra solo."
 )
-col_a, col_b = st.columns(2)
-with col_a:
-    home_team = st.text_input(
-        "Equipo A (local / favorito)", value="Argentina", key="setup_home_team"
-    )
-with col_b:
-    away_team = st.text_input(
-        "Equipo B (visita)", value="Cabo Verde", key="setup_away_team"
+
+# --- Selector de partido ---------------------------------------------------
+col_sel, col_btn = st.columns([5, 1])
+with col_btn:
+    st.write("")
+    if st.button("🔄 Actualizar lista", key="setup_refresh_btn"):
+        st.cache_data.clear()
+        st.rerun()
+
+try:
+    matches = _load_match_list()
+except pm.PolymarketError as exc:
+    st.error(f"No se pudo cargar la lista de partidos: {exc}")
+    st.stop()
+
+if not matches:
+    st.warning("No hay partidos del Mundial disponibles ahora mismo.")
+    st.stop()
+
+
+def _fmt_match(m):
+    fecha = (m.start_date or "")[:10]
+    return f"{m.home_team} vs {m.away_team} — {fecha} (liq ${m.total_liquidity:,.0f})"
+
+
+with col_sel:
+    selected = st.selectbox(
+        "Partido",
+        options=matches,
+        format_func=_fmt_match,
+        key="setup_match_select",
     )
 
-# --- Inputs: precios -------------------------------------------------------
-st.subheader("Precios de mercado (1X2)")
-col1, col2, col3 = st.columns(3)
-with col1:
-    price_home = st.number_input(
-        "Precio A (local)", min_value=0.0, max_value=1.0, value=0.86,
-        step=0.01, format="%.4f", key="setup_price_home",
-    )
-with col2:
-    price_draw = st.number_input(
-        "Precio empate", min_value=0.0, max_value=1.0, value=0.11,
-        step=0.01, format="%.4f", key="setup_price_draw",
-    )
-with col3:
-    price_away = st.number_input(
-        "Precio B (visita)", min_value=0.0, max_value=1.0, value=0.04,
-        step=0.01, format="%.4f", key="setup_price_away",
-    )
+# --- Carga de mercados del partido elegido ---------------------------------
+try:
+    mm = _load_match_markets(selected.slug)
+except pm.PolymarketError as exc:
+    st.error(f"No se pudieron cargar los mercados del partido: {exc}")
+    st.stop()
 
-use_over = st.checkbox(
-    "Incluir precio Over 2.5 (libera ρ en Dixon-Coles)",
-    value=False, key="setup_use_over",
+home_team = mm.summary.home_team
+away_team = mm.summary.away_team
+match_name = f"{home_team} vs {away_team}"
+
+st.divider()
+st.subheader(f"📊 {match_name}")
+st.caption(f"Inicio: {mm.summary.start_date[:16]}  ·  slug: `{mm.summary.slug}`")
+
+# --- Precios 1X2 con spread y liquidez por mercado (senal confiable) -------
+st.markdown("### Precios 1X2 (mercado)")
+required = {"home", "draw", "away"}
+if not required.issubset(mm.one_x_two):
+    st.error("El partido no tiene los 3 mercados 1X2 completos. Elige otro.")
+    st.stop()
+
+q_home = mm.one_x_two["home"]
+q_draw = mm.one_x_two["draw"]
+q_away = mm.one_x_two["away"]
+
+pc1, pc2, pc3 = st.columns(3)
+for col, label, q in (
+    (pc1, f"{home_team} (local)", q_home),
+    (pc2, "Empate", q_draw),
+    (pc3, f"{away_team} (visita)", q_away),
+):
+    spread = "—" if q.spread is None else f"{q.spread:.3f}"
+    liq = "—" if q.liquidity is None else f"${q.liquidity:,.0f}"
+    col.metric(label, f"{q.price:.3f}", help=f"spread {spread} · liq {liq}")
+    col.caption(f"spread {spread} · liq {liq}")
+
+st.caption(
+    "El spread de los mercados 1X2 es la senal confiable (suele ser ~0.01 en "
+    "partidos grandes). El flag agregado de calidad puede salir **HIGH_SPREAD** "
+    "por lineas O/U extremas y delgadas; no contamina el 1X2."
 )
-over_price = None
-if use_over:
-    over_price = st.number_input(
-        "Precio Over 2.5", min_value=0.0, max_value=1.0, value=0.50,
-        step=0.01, format="%.4f", key="setup_over_price",
-    )
+if mm.quality_flags and mm.quality_flags != ["OK"]:
+    st.warning(f"Flags de calidad (agregados): {', '.join(mm.quality_flags)}")
 
-# --- Inputs: modelo --------------------------------------------------------
+# --- Selector de modelo (default Dixon-Coles) ------------------------------
 model_label = st.radio(
     "Modelo",
-    options=["Poisson", "Dixon-Coles"],
+    options=["Dixon-Coles", "Poisson"],
+    index=0,
     horizontal=True,
     key="setup_model_label",
 )
 model_type = "dixon_coles" if model_label == "Dixon-Coles" else "poisson"
 
-# --- Inputs opcionales (display-only, no entran al cálculo) ----------------
-with st.expander("Contexto del mercado (opcional, solo se guarda)"):
-    oc1, oc2 = st.columns(2)
-    with oc1:
-        best_bid = st.number_input(
-            "Best bid (empate)", min_value=0.0, max_value=1.0, value=0.0,
-            step=0.01, format="%.4f", key="setup_best_bid",
-        )
-        volume = st.number_input(
-            "Volumen", min_value=0.0, value=0.0, step=1.0, key="setup_volume",
-        )
-        start_time = st.text_input(
-            "Hora de inicio", value="", key="setup_start_time"
-        )
-    with oc2:
-        best_ask = st.number_input(
-            "Best ask (empate)", min_value=0.0, max_value=1.0, value=0.0,
-            step=0.01, format="%.4f", key="setup_best_ask",
-        )
-        liquidity = st.number_input(
-            "Liquidez", min_value=0.0, value=0.0, step=1.0, key="setup_liquidity",
-        )
+# --- Calibracion -----------------------------------------------------------
+normalized = calibration.normalize_prices(q_home.price, q_draw.price, q_away.price)
+over_2_5_price = mm.over_under[2.5].price if 2.5 in mm.over_under else None
 
-# --- Acción: Calibrar ------------------------------------------------------
-if st.button("Calibrar", type="primary", key="setup_calibrate_btn"):
-    normalized = calibration.normalize_prices(price_home, price_draw, price_away)
-    result = calibration.calibrate(
-        normalized,
-        model=model_type,
-        over_2_5_price=over_price if use_over else None,
-        config=cfg,
-    )
-    metadata = {
-        "home_team": home_team,
-        "away_team": away_team,
-        "match_name": match_name,
-        "model_type": model_type,
-        "best_bid": best_bid,
-        "best_ask": best_ask,
-        "volume": volume,
-        "liquidity": liquidity,
-        "start_time": start_time,
-    }
-    state.save_model(
-        metadata=metadata,
-        calibration_result=result,
-        market_probs=normalized,
-        config=cfg,
-    )
-    # Limpiar snapshots viejos del partido anterior.
-    state.clear_snapshots()
-    st.success("Modelo calibrado y guardado en la sesión.")
+result = calibration.calibrate(
+    normalized,
+    model=model_type,
+    over_2_5_price=over_2_5_price,
+    config=cfg,
+)
 
-# --- Outputs (si hay modelo) ----------------------------------------------
-model = state.get_model()
-if model is None:
-    st.info("Calibra para ver los resultados.")
-    st.stop()
+metadata = {
+    "home_team": home_team,
+    "away_team": away_team,
+    "match_name": match_name,
+    "model_type": model_type,
+    "slug": mm.summary.slug,
+    "start_date": mm.summary.start_date,
+}
+state.save_model(
+    metadata=metadata,
+    calibration_result=result,
+    market_probs=normalized,
+    config=cfg,
+)
 
-st.divider()
-st.subheader("Resultados de calibración")
-
-market = model["market_probs"]
-lambda_home = model["lambda_home"]
-lambda_away = model["lambda_away"]
-rho = model["rho"]
-
-# Probabilidades normalizadas del mercado.
-oc1, oc2, oc3 = st.columns(3)
-oc1.metric("Mercado P(local)", f"{market['home']:.3f}")
-oc2.metric("Mercado P(empate)", f"{market['draw']:.3f}")
-oc3.metric("Mercado P(visita)", f"{market['away']:.3f}")
-
-# Lambdas / rho.
-lc1, lc2, lc3 = st.columns(3)
-lc1.metric("λ local", f"{lambda_home:.3f}")
-lc2.metric("λ visita", f"{lambda_away:.3f}")
-lc3.metric("ρ", f"{rho:.3f}")
-
-# Matriz del modelo según el tipo elegido.
+lambda_home = result["lambda_home"]
+lambda_away = result["lambda_away"]
+rho = result["rho"]
 max_goals = cfg["max_goals"]
-if model["model_type"] == "dixon_coles":
+
+if model_type == "dixon_coles":
     matrix = dixon_coles.score_matrix(lambda_home, lambda_away, rho, max_goals)
 else:
     matrix = poisson.score_matrix(lambda_home, lambda_away, max_goals)
 
-model_probs = poisson.outcome_probs(matrix)
-
-# Advertencias: |modelo - mercado| > 0.03 en algún outcome.
-warnings = calibration_warnings(model_probs, market)
-if warnings:
-    for w in warnings:
+lc1, lc2, lc3 = st.columns(3)
+lc1.metric("λ local", f"{lambda_home:.3f}")
+lc2.metric("λ visita", f"{lambda_away:.3f}")
+lc3.metric("ρ", f"{rho:.3f}")
+if result["warnings"]:
+    for w in result["warnings"]:
         st.warning(w)
 else:
-    st.caption("Sin advertencias: el modelo reproduce bien el mercado.")
+    st.caption("Calibracion OK: el modelo reproduce bien los precios 1X2.")
 
-# Top 10 marcadores.
-st.subheader("Marcadores más probables (top 10)")
-top = poisson.top_scores(matrix, 10)
-top_rows = [
-    {"Marcador": f"{h}-{a}", "Probabilidad": f"{p:.3f}"} for h, a, p in top
+# ===========================================================================
+# Modelo vs Mercado (pieza central)
+# ===========================================================================
+st.divider()
+st.markdown("## ⚖️ Modelo vs Mercado")
+st.caption("Edge = probabilidad del modelo − precio de mercado. Ordenado por |edge|.")
+
+market_quotes = [
+    {"market": "home", "market_price": q_home.price},
+    {"market": "draw", "market_price": q_draw.price},
+    {"market": "away", "market_price": q_away.price},
 ]
+for line in analytics.SUPPORTED_OU_LINES:
+    if line in mm.over_under:
+        market_quotes.append(
+            {"market": f"over_{line}", "market_price": mm.over_under[line].price}
+        )
+if mm.btts is not None:
+    market_quotes.append({"market": "btts", "market_price": mm.btts.price})
+
+mvm = analytics.model_vs_market(matrix, lambda_home, lambda_away, market_quotes)
+
+_LABELS = {
+    "home": f"Gana {home_team}",
+    "draw": "Empate",
+    "away": f"Gana {away_team}",
+    "btts": "Ambos anotan (BTTS)",
+}
+
+
+def _market_label(name: str) -> str:
+    if name in _LABELS:
+        return _LABELS[name]
+    if name.startswith("over_"):
+        return f"Over {name[len('over_'):]}"
+    return name
+
+
+def _edge_arrow(edge):
+    if edge is None:
+        return ""
+    if edge > 0.01:
+        return "🟢 ▲"
+    if edge < -0.01:
+        return "🔴 ▼"
+    return "⚪ ·"
+
+
+mvm_rows = [
+    {
+        "Mercado": _market_label(r["market"]),
+        "Modelo": "—" if r["model_prob"] is None else f"{r['model_prob']:.3f}",
+        "Mercado (precio)": f"{r['market_price']:.3f}",
+        "Edge": "—" if r["edge"] is None else f"{r['edge']:+.3f}",
+        "": _edge_arrow(r["edge"]),
+    }
+    for r in mvm
+]
+st.dataframe(mvm_rows, use_container_width=True, hide_index=True, key="setup_mvm_table")
+
+# ===========================================================================
+# Catalogo analitico
+# ===========================================================================
+st.divider()
+st.markdown("## 📈 Analitica del partido")
+
+probs = analytics.one_x_two(matrix)
+eg = analytics.expected_goals(lambda_home, lambda_away)
+dc = analytics.double_chance(probs)
+
+# --- Resumen ---------------------------------------------------------------
+st.markdown("### Resumen")
+rc1, rc2, rc3 = st.columns(3)
+rc1.metric(f"P(gana {home_team})", f"{probs['home']:.3f}")
+rc2.metric("P(empate)", f"{probs['draw']:.3f}")
+rc3.metric(f"P(gana {away_team})", f"{probs['away']:.3f}")
+
+eg1, eg2, eg3 = st.columns(3)
+eg1.metric("Goles esperados local", f"{eg['home']:.2f}")
+eg2.metric("Goles esperados visita", f"{eg['away']:.2f}")
+eg3.metric("Goles esperados total", f"{eg['total']:.2f}")
+
+st.markdown("**Doble oportunidad**")
+dcols = st.columns(3)
+dcols[0].metric("1X (local o empate)", f"{dc['home_or_draw']:.3f}")
+dcols[1].metric("12 (sin empate)", f"{dc['home_or_away']:.3f}")
+dcols[2].metric("X2 (empate o visita)", f"{dc['draw_or_away']:.3f}")
+
+# --- Goles -----------------------------------------------------------------
+st.markdown("### Goles")
+tgd = analytics.total_goals_distribution(matrix, up_to=5)
+tgd_labels = [str(k) for k in tgd.keys()]
+tgd_values = [tgd[k] for k in tgd.keys()]
+
+fig_goals = go.Figure(go.Bar(x=tgd_labels, y=tgd_values, marker_color="#4C78A8"))
+fig_goals.update_layout(
+    title="Distribucion de goles totales",
+    xaxis_title="Goles en el partido",
+    yaxis_title="Probabilidad",
+)
+st.plotly_chart(fig_goals, use_container_width=True)
+
+# Over/Under por linea (modelo) + comparativa con mercado donde exista.
+ou_lines = list(analytics.SUPPORTED_OU_LINES)
+ou_model_over = [analytics.over_under(matrix, line)["over"] for line in ou_lines]
+ou_table = [
+    {
+        "Linea": f"{line}",
+        "Over (modelo)": f"{analytics.over_under(matrix, line)['over']:.3f}",
+        "Under (modelo)": f"{analytics.over_under(matrix, line)['under']:.3f}",
+        "Over (mercado)": (
+            f"{mm.over_under[line].price:.3f}" if line in mm.over_under else "—"
+        ),
+    }
+    for line in ou_lines
+]
+st.markdown("**Over/Under por linea**")
+st.table(ou_table)
+
+# Grafico agrupado modelo vs mercado por linea O/U.
+market_over = [
+    mm.over_under[line].price if line in mm.over_under else None for line in ou_lines
+]
+fig_ou = go.Figure()
+fig_ou.add_trace(go.Bar(name="Over (modelo)", x=[str(l) for l in ou_lines], y=ou_model_over))
+fig_ou.add_trace(go.Bar(name="Over (mercado)", x=[str(l) for l in ou_lines], y=market_over))
+fig_ou.update_layout(
+    title="Over por linea: modelo vs mercado",
+    barmode="group",
+    xaxis_title="Linea O/U",
+    yaxis_title="P(Over)",
+)
+st.plotly_chart(fig_ou, use_container_width=True)
+
+# BTTS + clean sheets.
+bt = analytics.btts(matrix)
+cs = analytics.clean_sheets(matrix)
+gc1, gc2, gc3, gc4 = st.columns(4)
+gc1.metric("BTTS Si", f"{bt['yes']:.3f}")
+gc2.metric("BTTS No", f"{bt['no']:.3f}")
+gc3.metric(f"Valla invicta {home_team}", f"{cs['home']:.3f}")
+gc4.metric(f"Valla invicta {away_team}", f"{cs['away']:.3f}")
+
+# --- Dinamica --------------------------------------------------------------
+st.markdown("### Dinamica")
+fts = analytics.first_to_score(lambda_home, lambda_away)
+fc1, fc2, fc3 = st.columns(3)
+fc1.metric(f"Primero en anotar: {home_team}", f"{fts['home']:.3f}")
+fc2.metric(f"Primero en anotar: {away_team}", f"{fts['away']:.3f}")
+fc3.metric("Sin goles", f"{fts['none']:.3f}")
+
+wm = analytics.winning_margin(matrix)
+wm_table = [
+    {"Resultado": f"{home_team} por 1", "Prob.": f"{wm['home_by_1']:.3f}"},
+    {"Resultado": f"{home_team} por 2", "Prob.": f"{wm['home_by_2']:.3f}"},
+    {"Resultado": f"{home_team} por 3+", "Prob.": f"{wm['home_by_3+']:.3f}"},
+    {"Resultado": "Empate", "Prob.": f"{wm['draw']:.3f}"},
+    {"Resultado": f"{away_team} por 1", "Prob.": f"{wm['away_by_1']:.3f}"},
+    {"Resultado": f"{away_team} por 2", "Prob.": f"{wm['away_by_2']:.3f}"},
+    {"Resultado": f"{away_team} por 3+", "Prob.": f"{wm['away_by_3+']:.3f}"},
+]
+st.markdown("**Margen de victoria**")
+st.table(wm_table)
+
+# --- Marcadores ------------------------------------------------------------
+st.markdown("### Marcadores mas probables (top 10)")
+top = analytics.top_scores(matrix, 10)
+top_rows = [{"Marcador": f"{h}-{a}", "Probabilidad": f"{p:.3f}"} for h, a, p in top]
 st.table(top_rows)
-
-# Over 2.5 del modelo.
-over_model = poisson.prob_total_goals_at_least(matrix, 3)
-st.metric("Over 2.5 (modelo)", f"{over_model:.3f}")
-
-# Comparación modelo vs mercado 1X2 (tabla + barras).
-st.subheader("Modelo vs mercado (1X2)")
-comp_rows = [
-    {"Outcome": "Local", "Modelo": f"{model_probs['home']:.3f}", "Mercado": f"{market['home']:.3f}"},
-    {"Outcome": "Empate", "Modelo": f"{model_probs['draw']:.3f}", "Mercado": f"{market['draw']:.3f}"},
-    {"Outcome": "Visita", "Modelo": f"{model_probs['away']:.3f}", "Mercado": f"{market['away']:.3f}"},
-]
-st.table(comp_rows)
-
-labels = ["Local", "Empate", "Visita"]
-fig = go.Figure()
-fig.add_trace(go.Bar(
-    name="Modelo", x=labels,
-    y=[model_probs["home"], model_probs["draw"], model_probs["away"]],
-))
-fig.add_trace(go.Bar(
-    name="Mercado", x=labels,
-    y=[market["home"], market["draw"], market["away"]],
-))
-fig.update_layout(barmode="group", yaxis_title="Probabilidad", legend_title="")
-st.plotly_chart(fig, use_container_width=True)
