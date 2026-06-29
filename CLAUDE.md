@@ -19,13 +19,18 @@ backtesting + paper trading positivos primero.
 
 ## Estado actual
 
-**Entregable A: motor de probabilidades** (Fase 1 del spec maestro).
-Núcleo matemático puro, sin UI ni APIs externas.
+**Entregable A: motor de probabilidades** ✅ (Fase 1). Núcleo matemático puro.
 Diseño: `docs/superpowers/specs/2026-06-29-poisson-probability-engine-design.md`.
 
-Lo demás (dashboard Streamlit, conexión Polymarket, XGProvider real, estrategia/
-EV/señales, storage, paper trading, backtesting) son entregables posteriores,
-cada uno con su propio ciclo spec → plan → implementación.
+**Entregable B: dashboard manual Streamlit** ✅ (Fase 2). UI multipágina que
+envuelve el motor: Setup (precios → calibración) y Live (estado manual →
+probabilidades + edge + gráficos Plotly + snapshots en sesión). Sin estrategia,
+paper trading ni Polymarket. Diseño:
+`docs/superpowers/specs/2026-06-29-streamlit-dashboard-design.md`.
+
+Lo demás (conexión Polymarket, XGProvider real, estrategia/EV/señales, storage
+SQLite, paper trading, backtesting) son entregables posteriores, cada uno con su
+propio ciclo spec → plan → implementación.
 
 ## Estructura
 
@@ -43,6 +48,7 @@ config.yaml      parámetros del modelo (max_goals, tau, pesos, caps, rho...)
 - Instalar deps: `pip install -r requirements.txt`
 - Correr tests: `.venv/bin/python -m pytest -q`
 - Correr un test: `.venv/bin/python -m pytest tests/test_poisson.py -q`
+- Levantar el dashboard: `.venv/bin/python -m streamlit run app/dashboard.py`
 
 ## Convenciones de código
 
