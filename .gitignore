@@ -1,0 +1,27 @@
+# Secrets — NUNCA commitear credenciales
+.env
+.env.*
+*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+
+# Data / outputs (se mantienen las carpetas, no su contenido)
+data/raw/*
+data/processed/*
+data/backtests/*
+!data/**/.gitkeep
+*.db
+*.sqlite
+
+# OS / editores
+.DS_Store
+.vscode/
+.idea/
