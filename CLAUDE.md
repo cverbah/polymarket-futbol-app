@@ -22,24 +22,35 @@ backtesting + paper trading positivos primero.
 **Entregable A: motor de probabilidades** ✅ (Fase 1). Núcleo matemático puro.
 Diseño: `docs/superpowers/specs/2026-06-29-poisson-probability-engine-design.md`.
 
-**Entregable B: dashboard manual Streamlit** ✅ (Fase 2). UI multipágina que
-envuelve el motor: Setup (precios → calibración) y Live (estado manual →
-probabilidades + edge + gráficos Plotly + snapshots en sesión). Sin estrategia,
-paper trading ni Polymarket. Diseño:
+**Entregable B: dashboard manual Streamlit** ✅ (Fase 2). UI multipágina:
+Home, Market Setup y Live Match (estado manual → probabilidades + edge +
+gráficos Plotly + snapshots en sesión). Diseño:
 `docs/superpowers/specs/2026-06-29-streamlit-dashboard-design.md`.
 
-Lo demás (conexión Polymarket, XGProvider real, estrategia/EV/señales, storage
+**Entregable C: Market Setup conectado a Polymarket + analítica rica** ✅
+(Fase 3 parcial). Market Setup se reescribió: **selector de partidos del Mundial
+2026 traídos en vivo de Polymarket** (cero inputs manuales), auto-calibración, y
+analítica completa (goles esperados, distribución de goles, O/U por línea, BTTS,
+clean sheets, primer gol, margen, doble oportunidad, top scores) + tabla
+**Modelo vs Mercado** (edge por mercado). Connector read-only Gamma API en
+`src/connectors/polymarket.py`; analítica pura en `src/models/analytics.py`.
+Diseño: `docs/superpowers/specs/2026-06-29-polymarket-marketsetup-analytics-design.md`.
+
+Lo demás (mejoras a Live Match, XGProvider real, estrategia/EV/señales, storage
 SQLite, paper trading, backtesting) son entregables posteriores, cada uno con su
 propio ciclo spec → plan → implementación.
 
 ## Estructura
 
 ```text
-src/models/      poisson.py, dixon_coles.py, calibration.py, live_update.py
-src/utils/       validation.py
+src/models/      poisson.py, dixon_coles.py, calibration.py, live_update.py, analytics.py
+src/connectors/  polymarket.py (Gamma API read-only: descubrir partidos + leer mercados)
+src/dashboard/   logic.py (puro), state.py (session_state)
+src/utils/       validation.py, config.py
+app/             dashboard.py + pages/01_market_setup.py + pages/02_live_match.py
 notebooks/       poisson_sandbox.ipynb (demo Argentina vs Cabo Verde)
-tests/           test_poisson.py, test_calibration.py, test_live_update.py
-config.yaml      parámetros del modelo (max_goals, tau, pesos, caps, rho...)
+tests/           test_*.py + fixtures/ (JSON reales de Polymarket para tests sin red)
+config.yaml      bloques `model:` y `polymarket:`
 ```
 
 ## Entorno y comandos
