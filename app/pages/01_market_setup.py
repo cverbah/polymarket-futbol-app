@@ -143,6 +143,34 @@ st.caption(
 if mm.quality_flags and mm.quality_flags != ["OK"]:
     st.warning(f"Flags de calidad (agregados): {', '.join(mm.quality_flags)}")
 
+# --- Estado del partido (time-aware): pre / live / post --------------------
+# El connector ya parsea el minuto + marcador desde el mismo evento Gamma.
+live = mm.live
+status = live.status  # "pre" | "in" | "halftime" | "post"
+is_live = status in ("in", "halftime")
+max_goals = cfg["max_goals"]
+
+
+def _period_label(st_: str, minute) -> str:
+    """Texto del periodo para el banner live."""
+    if st_ == "halftime":
+        return "Entretiempo"
+    if minute is not None and minute <= 45:
+        return "1er tiempo"
+    return "2do tiempo"
+
+
+# --- Caso TERMINADO: marcador final, sin calibracion ni proyeccion ---------
+if status == "post":
+    h = live.home_score if live.home_score is not None else "?"
+    a = live.away_score if live.away_score is not None else "?"
+    st.markdown(f"### 🏁 Resultado final: **{h} - {a}**")
+    st.info(
+        "Partido terminado. Los precios ya no son accionables, por lo que no se "
+        "calibra el modelo ni se muestra proyeccion."
+    )
+    st.stop()
+
 # --- Selector de modelo (default Dixon-Coles) ------------------------------
 model_label = st.radio(
     "Modelo",
@@ -153,58 +181,130 @@ model_label = st.radio(
 )
 model_type = "dixon_coles" if model_label == "Dixon-Coles" else "poisson"
 
-# --- Calibracion -----------------------------------------------------------
+# --- Calibracion (time-aware) ----------------------------------------------
 normalized = calibration.normalize_prices(q_home.price, q_draw.price, q_away.price)
-over_2_5_price = mm.over_under[2.5].price if 2.5 in mm.over_under else None
 
-result = calibration.calibrate(
-    normalized,
-    model=model_type,
-    over_2_5_price=over_2_5_price,
-    config=cfg,
-)
+if is_live:
+    # LIVE: banner destacado + calibracion de lambdas RESTANTES condicionados
+    # al marcador actual, contra el precio live. El minuto solo se muestra.
+    h_score = live.home_score or 0
+    a_score = live.away_score or 0
+    minute_txt = "—" if live.minute is None else f"{live.minute:.0f}'"
+    st.success(
+        f"🟢 EN VIVO · min {minute_txt} · {h_score}-{a_score} · "
+        f"{_period_label(status, live.minute)}"
+    )
 
-metadata = {
-    "home_team": home_team,
-    "away_team": away_team,
-    "match_name": match_name,
-    "model_type": model_type,
-    "slug": mm.summary.slug,
-    "start_date": mm.summary.start_date,
-}
-state.save_model(
-    metadata=metadata,
-    calibration_result=result,
-    market_probs=normalized,
-    config=cfg,
-)
+    cal = calibration.calibrate_remaining(
+        normalized,
+        h_score,
+        a_score,
+        model=model_type,
+        config=cfg,
+    )
+    lambda_home = cal["lambda_home_remaining"]
+    lambda_away = cal["lambda_away_remaining"]
+    rho = cal["rho"]
 
-lambda_home = result["lambda_home"]
-lambda_away = result["lambda_away"]
-rho = result["rho"]
-max_goals = cfg["max_goals"]
+    # Matriz de goles RESTANTES -> matriz del marcador FINAL (desplazada por H,A).
+    if model_type == "dixon_coles":
+        remaining_matrix = dixon_coles.score_matrix(lambda_home, lambda_away, rho, max_goals)
+    else:
+        remaining_matrix = poisson.score_matrix(lambda_home, lambda_away, max_goals)
+    matrix = analytics.final_score_matrix(remaining_matrix, h_score, a_score, max_goals)
 
-if model_type == "dixon_coles":
-    matrix = dixon_coles.score_matrix(lambda_home, lambda_away, rho, max_goals)
+    # Guardar en sesion: lambdas RESTANTES + bloque live en metadata.
+    metadata = {
+        "home_team": home_team,
+        "away_team": away_team,
+        "match_name": match_name,
+        "model_type": model_type,
+        "slug": mm.summary.slug,
+        "start_date": mm.summary.start_date,
+        "live": {
+            "minute": live.minute,
+            "home_score": h_score,
+            "away_score": a_score,
+            "status": status,
+        },
+    }
+    state.save_model(
+        metadata=metadata,
+        calibration_result={
+            "lambda_home": lambda_home,
+            "lambda_away": lambda_away,
+            "rho": rho,
+        },
+        market_probs=normalized,
+        config=cfg,
+    )
+
+    lc1, lc2, lc3 = st.columns(3)
+    lc1.metric("λ local restante", f"{lambda_home:.3f}")
+    lc2.metric("λ visita restante", f"{lambda_away:.3f}")
+    lc3.metric("ρ", f"{rho:.3f}")
+    st.caption(
+        "En vivo: los λ representan los goles que **quedan** por anotar, "
+        "calibrados al precio live y condicionados al marcador actual."
+    )
 else:
-    matrix = poisson.score_matrix(lambda_home, lambda_away, max_goals)
+    # PRE-PARTIDO: comportamiento de siempre (90 min desde 0-0).
+    st.caption("🔵 Pre-partido")
+    over_2_5_price = mm.over_under[2.5].price if 2.5 in mm.over_under else None
+    result = calibration.calibrate(
+        normalized,
+        model=model_type,
+        over_2_5_price=over_2_5_price,
+        config=cfg,
+    )
 
-lc1, lc2, lc3 = st.columns(3)
-lc1.metric("λ local", f"{lambda_home:.3f}")
-lc2.metric("λ visita", f"{lambda_away:.3f}")
-lc3.metric("ρ", f"{rho:.3f}")
-if result["warnings"]:
-    for w in result["warnings"]:
-        st.warning(w)
-else:
-    st.caption("Calibracion OK: el modelo reproduce bien los precios 1X2.")
+    metadata = {
+        "home_team": home_team,
+        "away_team": away_team,
+        "match_name": match_name,
+        "model_type": model_type,
+        "slug": mm.summary.slug,
+        "start_date": mm.summary.start_date,
+    }
+    state.save_model(
+        metadata=metadata,
+        calibration_result=result,
+        market_probs=normalized,
+        config=cfg,
+    )
+
+    lambda_home = result["lambda_home"]
+    lambda_away = result["lambda_away"]
+    rho = result["rho"]
+
+    if model_type == "dixon_coles":
+        matrix = dixon_coles.score_matrix(lambda_home, lambda_away, rho, max_goals)
+    else:
+        matrix = poisson.score_matrix(lambda_home, lambda_away, max_goals)
+
+    lc1, lc2, lc3 = st.columns(3)
+    lc1.metric("λ local", f"{lambda_home:.3f}")
+    lc2.metric("λ visita", f"{lambda_away:.3f}")
+    lc3.metric("ρ", f"{rho:.3f}")
+    if result["warnings"]:
+        for w in result["warnings"]:
+            st.warning(w)
+    else:
+        st.caption("Calibracion OK: el modelo reproduce bien los precios 1X2.")
 
 # ===========================================================================
 # Modelo vs Mercado (pieza central)
 # ===========================================================================
 st.divider()
 st.markdown("## ⚖️ Modelo vs Mercado")
-st.caption("Edge = probabilidad del modelo − precio de mercado. Ordenado por |edge|.")
+if is_live:
+    st.caption(
+        "En vivo: el modelo se evalua sobre la **proyeccion final** (marcador "
+        "actual + goles restantes) contra el precio live. "
+        "Edge = modelo − mercado, ordenado por |edge|."
+    )
+else:
+    st.caption("Edge = probabilidad del modelo − precio de mercado. Ordenado por |edge|.")
 
 market_quotes = [
     {"market": "home", "market_price": q_home.price},
@@ -263,10 +363,16 @@ st.dataframe(mvm_rows, use_container_width=True, hide_index=True, key="setup_mvm
 # Catalogo analitico
 # ===========================================================================
 st.divider()
-st.markdown("## 📈 Analitica del partido")
+if is_live:
+    st.markdown("## 📈 Proyección final (en vivo)")
+    st.caption(
+        "Todas las cifras son del **resultado final** proyectado: marcador "
+        "actual mas los goles que aun quedan por anotar."
+    )
+else:
+    st.markdown("## 📈 Analitica del partido")
 
 probs = analytics.one_x_two(matrix)
-eg = analytics.expected_goals(lambda_home, lambda_away)
 dc = analytics.double_chance(probs)
 
 # --- Resumen ---------------------------------------------------------------
@@ -276,10 +382,30 @@ rc1.metric(f"P(gana {home_team})", f"{probs['home']:.3f}")
 rc2.metric("P(empate)", f"{probs['draw']:.3f}")
 rc3.metric(f"P(gana {away_team})", f"{probs['away']:.3f}")
 
-eg1, eg2, eg3 = st.columns(3)
-eg1.metric("Goles esperados local", f"{eg['home']:.2f}")
-eg2.metric("Goles esperados visita", f"{eg['away']:.2f}")
-eg3.metric("Goles esperados total", f"{eg['total']:.2f}")
+if is_live:
+    # Goles esperados live: marcado vs restante vs total proyectado.
+    egl = analytics.expected_goals_live(h_score, a_score, lambda_home, lambda_away)
+    st.markdown("**Goles esperados (marcado · restante · total proyectado)**")
+    egc1, egc2, egc3 = st.columns(3)
+    egc1.metric(
+        f"{home_team}",
+        f"{egl['home_total']:.2f}",
+        help=f"marcado {egl['home_scored']:.0f} + restante {egl['home_remaining']:.2f}",
+    )
+    egc1.caption(f"{egl['home_scored']:.0f} marcado + {egl['home_remaining']:.2f} restante")
+    egc2.metric(
+        f"{away_team}",
+        f"{egl['away_total']:.2f}",
+        help=f"marcado {egl['away_scored']:.0f} + restante {egl['away_remaining']:.2f}",
+    )
+    egc2.caption(f"{egl['away_scored']:.0f} marcado + {egl['away_remaining']:.2f} restante")
+    egc3.metric("Total proyectado", f"{egl['total']:.2f}")
+else:
+    eg = analytics.expected_goals(lambda_home, lambda_away)
+    eg1, eg2, eg3 = st.columns(3)
+    eg1.metric("Goles esperados local", f"{eg['home']:.2f}")
+    eg2.metric("Goles esperados visita", f"{eg['away']:.2f}")
+    eg3.metric("Goles esperados total", f"{eg['total']:.2f}")
 
 st.markdown("**Doble oportunidad**")
 dcols = st.columns(3)
@@ -344,11 +470,20 @@ gc4.metric(f"Valla invicta {away_team}", f"{cs['away']:.3f}")
 
 # --- Dinamica --------------------------------------------------------------
 st.markdown("### Dinamica")
-fts = analytics.first_to_score(lambda_home, lambda_away)
-fc1, fc2, fc3 = st.columns(3)
-fc1.metric(f"Primero en anotar: {home_team}", f"{fts['home']:.3f}")
-fc2.metric(f"Primero en anotar: {away_team}", f"{fts['away']:.3f}")
-fc3.metric("Sin goles", f"{fts['none']:.3f}")
+if is_live:
+    # "Proximo en anotar" sobre los lambdas RESTANTES (el orden real del primer
+    # gol no es recuperable solo del marcador). Si va 0-0 equivale al primer gol.
+    nts = analytics.next_to_score(lambda_home, lambda_away)
+    fc1, fc2, fc3 = st.columns(3)
+    fc1.metric(f"Próximo en anotar: {home_team}", f"{nts['home']:.3f}")
+    fc2.metric(f"Próximo en anotar: {away_team}", f"{nts['away']:.3f}")
+    fc3.metric("Sin mas goles", f"{nts['none']:.3f}")
+else:
+    fts = analytics.first_to_score(lambda_home, lambda_away)
+    fc1, fc2, fc3 = st.columns(3)
+    fc1.metric(f"Primero en anotar: {home_team}", f"{fts['home']:.3f}")
+    fc2.metric(f"Primero en anotar: {away_team}", f"{fts['away']:.3f}")
+    fc3.metric("Sin goles", f"{fts['none']:.3f}")
 
 wm = analytics.winning_margin(matrix)
 wm_table = [
