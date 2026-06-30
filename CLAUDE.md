@@ -46,6 +46,14 @@ próximo en anotar, BTTS/clean-sheet condicionados) y **post** (marcador final).
 `expected_goals_live` en `analytics.py`. Diseño:
 `docs/superpowers/specs/2026-06-29-time-aware-market-setup-design.md`.
 
+**Entregable E: Live Match auto-refrescado** ✅. La página dejó de ser manual:
+reutiliza el modelo de Market Setup (por `slug`), sondea Polymarket en un
+`st.fragment(run_every=...)`, acumula snapshots solos y muestra **Gráfico A**
+(win-probability: P local/empate/visita del resultado final en el tiempo, con
+marcas de gol) y **Gráfico C** (escáner de edge multi-mercado). xG diferido
+(sin fuente live gratuita confiable). Diseño:
+`docs/superpowers/specs/2026-06-30-live-match-auto-tracking-design.md`.
+
 Lo demás (xG live + edge real, mejoras a Live Match, estrategia/EV/señales,
 storage SQLite, paper trading, backtesting) son entregables posteriores, cada uno
 con su propio ciclo spec → plan → implementación.

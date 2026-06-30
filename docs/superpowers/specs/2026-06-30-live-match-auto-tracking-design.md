@@ -1,7 +1,7 @@
 # Diseño — Live Match auto-refrescado (auto-tracking en vivo)
 
 **Fecha:** 2026-06-30
-**Estado:** aprobado (brainstorming), pendiente de plan de implementación.
+**Estado:** implementado (2026-06-30).
 **Entregable:** mejora del Live Match (Fase posterior a Entregable D).
 
 ## 1. Contexto y objetivo
