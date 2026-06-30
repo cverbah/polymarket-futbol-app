@@ -107,10 +107,10 @@ def build_live_snapshot(model: dict, match_markets, config: dict) -> dict:
             )
     if mm.btts is not None:
         market_quotes.append({"market": "btts", "market_price": mm.btts.price})
+    draw_price = mm.one_x_two["draw"].price
 
     edges = analytics.model_vs_market(final_matrix, lh_rem, la_rem, market_quotes)
     best = next((e for e in edges if e["edge"] is not None), None)
-    draw_price = mm.one_x_two["draw"].price
 
     return {
         "minute": minute,
@@ -121,7 +121,7 @@ def build_live_snapshot(model: dict, match_markets, config: dict) -> dict:
         "model_draw_prob": probs["draw"],
         "model_away_prob": probs["away"],
         "market_draw_price": draw_price,
-        "edge": probs["draw"] - draw_price,
+        "edge": compute_edge(probs["draw"], draw_price),
         "edges": edges,
         "best_opportunity": best,
     }
