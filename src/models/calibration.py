@@ -148,10 +148,23 @@ def calibrate_remaining(
     x0 = [1.0, 1.0]
     result = minimize(objective, x0=x0, bounds=bounds, method="L-BFGS-B")
 
+    lambda_home_rem, lambda_away_rem = float(result.x[0]), float(result.x[1])
+    final_probs = live_update.remaining_outcome_probs(
+        lambda_home_rem,
+        lambda_away_rem,
+        home_score,
+        away_score,
+        model=model,
+        rho=fixed_rho,
+        max_goals=max_goals,
+    )
+    warnings = calibration_warnings(final_probs, target_probs)
+
     return {
-        "lambda_home_remaining": float(result.x[0]),
-        "lambda_away_remaining": float(result.x[1]),
+        "lambda_home_remaining": lambda_home_rem,
+        "lambda_away_remaining": lambda_away_rem,
         "rho": float(fixed_rho),
         "loss": float(result.fun),
         "success": bool(result.success),
+        "warnings": warnings,
     }

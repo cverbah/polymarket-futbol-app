@@ -172,7 +172,9 @@ _render_state_banner(live, mm.summary.start_date)
 # --- Precios 1X2 con spread y liquidez por mercado (senal confiable) -------
 st.markdown("### Precios 1X2 (mercado)")
 required = {"home", "draw", "away"}
-if not required.issubset(mm.one_x_two):
+if not required.issubset(mm.one_x_two) or any(
+    mm.one_x_two[name].price is None for name in required
+):
     st.error("El partido no tiene los 3 mercados 1X2 completos. Elige otro.")
     st.stop()
 
@@ -282,6 +284,11 @@ if is_live:
         "En vivo: los λ representan los goles que **quedan** por anotar, "
         "calibrados al precio live y condicionados al marcador actual."
     )
+    if cal["warnings"]:
+        for w in cal["warnings"]:
+            st.warning(w)
+    else:
+        st.caption("Calibracion OK: el modelo reproduce bien el precio live.")
 else:
     # PRE-PARTIDO: comportamiento de siempre (90 min desde 0-0). El estado ya
     # se muestra en el banner de cabecera.
@@ -347,11 +354,11 @@ market_quotes = [
     {"market": "away", "market_price": q_away.price},
 ]
 for line in analytics.SUPPORTED_OU_LINES:
-    if line in mm.over_under:
+    if line in mm.over_under and mm.over_under[line].price is not None:
         market_quotes.append(
             {"market": f"over_{line}", "market_price": mm.over_under[line].price}
         )
-if mm.btts is not None:
+if mm.btts is not None and mm.btts.price is not None:
     market_quotes.append({"market": "btts", "market_price": mm.btts.price})
 
 mvm = analytics.model_vs_market(matrix, lambda_home, lambda_away, market_quotes)
@@ -471,7 +478,9 @@ ou_table = [
         "Over (modelo)": f"{analytics.over_under(matrix, line)['over']:.3f}",
         "Under (modelo)": f"{analytics.over_under(matrix, line)['under']:.3f}",
         "Over (mercado)": (
-            f"{mm.over_under[line].price:.3f}" if line in mm.over_under else "—"
+            f"{mm.over_under[line].price:.3f}"
+            if line in mm.over_under and mm.over_under[line].price is not None
+            else "—"
         ),
     }
     for line in ou_lines

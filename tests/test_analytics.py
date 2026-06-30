@@ -175,3 +175,13 @@ def test_model_vs_market_skips_unknown_market(calibrated):
     assert by_market["home"]["model_prob"] is not None
     assert by_market["corners_over_9.5"]["model_prob"] is None
     assert by_market["corners_over_9.5"]["edge"] is None
+
+
+def test_model_vs_market_handles_missing_market_price(calibrated):
+    """Un quote con price=None (Polymarket devolvio outcomePrices incompleto)
+    no debe crashear: el mercado se reconoce pero el edge queda en None."""
+    matrix = calibrated["matrix"]
+    quotes = [{"market": "draw", "market_price": None}]
+    rows = analytics.model_vs_market(matrix, 1.0, 1.0, quotes)
+    assert rows[0]["model_prob"] is not None
+    assert rows[0]["edge"] is None

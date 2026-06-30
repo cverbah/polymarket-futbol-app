@@ -246,7 +246,7 @@ def model_vs_market(
         name = quote["market"]
         price = quote["market_price"]
         model_prob = _model_prob_for_market(matrix, name)
-        edge = None if model_prob is None else model_prob - price
+        edge = None if model_prob is None or price is None else model_prob - price
         rows.append(
             {
                 "market": name,

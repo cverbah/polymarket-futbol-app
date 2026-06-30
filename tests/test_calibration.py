@@ -91,12 +91,17 @@ def test_calibrate_remaining_round_trip():
         target, home_score=H, away_score=A, model=model, rho=rho, config=cfg
     )
     assert result["success"]
-    for key in ("lambda_home_remaining", "lambda_away_remaining", "rho", "loss", "success"):
+    for key in (
+        "lambda_home_remaining", "lambda_away_remaining", "rho", "loss",
+        "success", "warnings",
+    ):
         assert key in result
 
     # Recupera los lambdas verdaderos.
     assert abs(result["lambda_home_remaining"] - true_lh_rem) < 0.05
     assert abs(result["lambda_away_remaining"] - true_la_rem) < 0.05
+    # Round-trip exacto: la calibracion reproduce bien el mercado -> sin warnings.
+    assert result["warnings"] == []
 
     # Reproduce las probabilidades objetivo.
     recovered = live_update.remaining_outcome_probs(
@@ -105,6 +110,17 @@ def test_calibrate_remaining_round_trip():
     )
     for k in ("home", "draw", "away"):
         assert abs(recovered[k] - target[k]) < 1e-3
+
+
+def test_calibrate_remaining_warns_when_market_contradicts_scoreline():
+    """5-0 ya jugado + mercado que dice 'visita favorita' es estructuralmente
+    irreproducible: calibrate_remaining debe advertirlo, igual que calibrate()."""
+    cfg = load_config()
+    target = {"home": 0.05, "draw": 0.05, "away": 0.90}
+    result = calibration.calibrate_remaining(
+        target, home_score=5, away_score=0, model="dixon_coles", config=cfg
+    )
+    assert result["warnings"]
 
 
 def test_calibrate_remaining_at_0_0_matches_prematch():

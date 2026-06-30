@@ -61,6 +61,9 @@ def score_matrix(
     for i in (0, 1):
         for j in (0, 1):
             matrix[i, j] *= tau(i, j, lambda_home, lambda_away, rho)
+    # Con rho/lambdas extremos tau puede volverse negativo: recortar a 0 para
+    # mantener una distribucion de probabilidad valida antes de re-normalizar.
+    np.clip(matrix, 0.0, None, out=matrix)
     # Re-normalizar para que sume 1 (tau puede romper la suma).
     matrix /= matrix.sum()
     return matrix

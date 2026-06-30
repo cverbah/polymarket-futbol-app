@@ -230,6 +230,56 @@ def test_pre_match_path_saves_model():
 # --------------------------------------------------------------------------- #
 # TERMINADO: marcador final + nota, sin proyeccion
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Robustez: precios incompletos desde Polymarket (outcomePrices vacio/malformado)
+# --------------------------------------------------------------------------- #
+def test_missing_required_1x2_price_shows_error_not_crash():
+    """Si Gamma devuelve un mercado 1X2 con price=None, la pagina debe avisar
+    en vez de crashear formateando None con :.3f (bug encontrado en auditoria)."""
+    markets = _germany_paraguay_markets()
+    markets.one_x_two["home"].price = None
+    with _patched_with(markets) as (at, _, _):
+        assert not at.exception
+        text = _all_text(at)
+        assert "no tiene los 3 mercados 1X2 completos" in text
+
+
+def test_missing_ou_line_price_does_not_crash_and_is_excluded():
+    """Una linea O/U presente pero con price=None no debe crashear la tabla ni
+    la comparativa Modelo vs Mercado: se trata igual que linea ausente."""
+    markets = _germany_paraguay_markets()
+    markets.over_under[2.5].price = None
+    with _patched_with(markets) as (at, _, _):
+        assert not at.exception
+        # No debe aparecer una fila "Over 2.5" rota en Modelo vs Mercado.
+        mvm_df = at.dataframe[0].value
+        assert "Over 2.5" not in mvm_df["Mercado"].tolist()
+
+
+def test_missing_btts_price_does_not_crash():
+    markets = _germany_paraguay_markets()
+    markets.btts.price = None
+    with _patched_with(markets) as (at, _, _):
+        assert not at.exception
+
+
+# --------------------------------------------------------------------------- #
+# Robustez: calibracion en vivo debe avisar si no reproduce bien el mercado
+# (la calibracion pre-partido ya lo hacia; faltaba en calibrate_remaining).
+# --------------------------------------------------------------------------- #
+def test_live_warns_when_market_contradicts_scoreline():
+    markets = _germany_paraguay_markets()
+    markets.live.home_score = 5
+    markets.live.away_score = 0
+    markets.one_x_two["home"].price = 0.05
+    markets.one_x_two["draw"].price = 0.05
+    markets.one_x_two["away"].price = 0.90
+    with _patched_with(markets) as (at, _, _):
+        assert not at.exception
+        text = _all_text(at)
+        assert "El modelo puede no reproducir bien el mercado" in text
+
+
 def test_post_match_shows_finished_message():
     with _patched_with(_post_markets()) as (at, _, _):
         assert not at.exception

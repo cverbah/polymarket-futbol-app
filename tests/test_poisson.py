@@ -70,3 +70,12 @@ def test_dixon_coles_zero_rho_equals_poisson():
     m_pois = poisson.score_matrix(lam_h, lam_a)
     m_dc = dixon_coles.score_matrix(lam_h, lam_a, rho=0.0)
     assert np.allclose(m_pois, m_dc, atol=1e-9)
+
+
+def test_dixon_coles_never_negative_even_at_extreme_rho():
+    """tau(i,j) puede volverse negativo en (0,0)/(1,1) con rho/lambdas extremos
+    (ej. calibracion empujada a un borde por un mercado Over/Under inconsistente).
+    score_matrix debe seguir devolviendo una distribucion de probabilidad valida."""
+    m = dixon_coles.score_matrix(2.86, 2.71, rho=-1.0)
+    assert (m >= 0).all()
+    assert abs(m.sum() - 1.0) < 1e-6
