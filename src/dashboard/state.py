@@ -21,7 +21,6 @@ import streamlit as st
 
 # Claves centralizadas de session_state.
 MODEL_KEY = "model"
-SNAPSHOTS_KEY = "snapshots"
 SERIES_KEY = "live_series"
 SERIES_SLUG_KEY = "live_series_slug"
 
@@ -52,29 +51,10 @@ def get_model() -> dict | None:
     return st.session_state.get(MODEL_KEY)
 
 
-def append_snapshot(snapshot: dict) -> None:
-    """Agrega un snapshot a la serie en memoria de la sesión."""
-    if SNAPSHOTS_KEY not in st.session_state:
-        st.session_state[SNAPSHOTS_KEY] = []
-    st.session_state[SNAPSHOTS_KEY].append(snapshot)
-
-
-def get_snapshots() -> list:
-    """Devuelve la lista de snapshots registrados (vacía si no hay)."""
-    if SNAPSHOTS_KEY not in st.session_state:
-        st.session_state[SNAPSHOTS_KEY] = []
-    return st.session_state[SNAPSHOTS_KEY]
-
-
-def clear_snapshots() -> None:
-    """Limpia la serie de snapshots."""
-    st.session_state[SNAPSHOTS_KEY] = []
-
-
 def reset_session() -> None:
-    """Limpia el modelo y los snapshots de la sesión."""
+    """Limpia el modelo y la serie de snapshots de la sesión."""
     st.session_state.pop(MODEL_KEY, None)
-    st.session_state[SNAPSHOTS_KEY] = []
+    st.session_state[SERIES_KEY] = []
 
 
 def append_live_snapshot(slug: str, snapshot: dict) -> None:

@@ -58,41 +58,6 @@ def describe_edge(edge: float, tol: float = 0.005) -> str:
     return "Modelo y mercado coinciden en el empate"
 
 
-def build_snapshot(model: dict, match_state, market_draw_price: float, config: dict) -> dict:
-    """Corre el motor live y arma el dict del snapshot.
-
-    Función pura: deriva modelo/rho del dict `model`, calcula probabilidades
-    live, lambdas restantes y edge. No toca Streamlit.
-    """
-    model_type = model["model_type"]
-    rho = model["rho"]
-    lambda_home = model["lambda_home"]
-    lambda_away = model["lambda_away"]
-
-    probs = live_update.live_outcome_probs(
-        lambda_home, lambda_away, match_state, config, model=model_type, rho=rho
-    )
-    remaining = live_update.adjusted_remaining_lambdas(
-        lambda_home, lambda_away, match_state, config
-    )
-
-    edge = compute_edge(probs["draw"], market_draw_price)
-
-    return {
-        "minute": match_state.minute,
-        "home_score": match_state.home_score,
-        "away_score": match_state.away_score,
-        "home_xg": match_state.home_xg,
-        "away_xg": match_state.away_xg,
-        "model_home_prob": probs["home"],
-        "model_draw_prob": probs["draw"],
-        "model_away_prob": probs["away"],
-        "market_draw_price": market_draw_price,
-        "edge": edge,
-        "lambda_home_remaining": remaining["lambda_home"],
-        "lambda_away_remaining": remaining["lambda_away"],
-    }
-
 
 def build_live_snapshot(model: dict, match_markets, config: dict) -> dict:
     """Arma el snapshot live desde el modelo guardado y la lectura de mercados.
@@ -158,17 +123,3 @@ def build_live_snapshot(model: dict, match_markets, config: dict) -> dict:
     }
 
 
-def forward_draw_curve(model: dict, config: dict, current_minute: float) -> list:
-    """Curva del empate forward: solo puntos desde el minuto actual hasta 90.
-
-    Envuelve `live_update.fair_draw_curve` y filtra los puntos con
-    `minute >= current_minute`, asegurando que el minuto 90 esté incluido.
-    """
-    curve = live_update.fair_draw_curve(
-        model["lambda_home"],
-        model["lambda_away"],
-        config,
-        model=model["model_type"],
-        rho=model["rho"],
-    )
-    return [point for point in curve if point["minute"] >= current_minute]
