@@ -29,3 +29,6 @@ data/backtests/*
 # Artefactos de pruebas en navegador
 .playwright-mcp/
 *.png
+
+# Brainstorming visual companion (mockups efímeros)
+.superpowers/
