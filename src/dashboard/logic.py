@@ -8,6 +8,37 @@ from __future__ import annotations
 
 from src.models import analytics, dixon_coles, live_update, poisson
 
+_MARKET_LABELS = {"home": "Local", "draw": "Empate", "away": "Visita", "btts": "BTTS"}
+
+
+def market_label(name: str) -> str:
+    """Rótulo legible de un mercado canónico (home/draw/away/over_L/btts)."""
+    if name in _MARKET_LABELS:
+        return _MARKET_LABELS[name]
+    if name.startswith("over_"):
+        return f"Over {name[len('over_'):]}"
+    return name
+
+
+def goal_markers(series: list) -> list:
+    """Puntos de la serie donde cambió el marcador (para marcar goles en el eje).
+
+    Devuelve un dict {minute, home_score, away_score} por cada snapshot cuyo
+    marcador difiere del snapshot inmediatamente anterior.
+    """
+    markers = []
+    prev = None
+    for s in series:
+        score = (s["home_score"], s["away_score"])
+        if prev is not None and score != prev:
+            markers.append({
+                "minute": s["minute"],
+                "home_score": s["home_score"],
+                "away_score": s["away_score"],
+            })
+        prev = score
+    return markers
+
 
 def compute_edge(model_draw_prob: float, market_draw_price: float) -> float:
     """Edge del empate: probabilidad del modelo menos precio del mercado."""

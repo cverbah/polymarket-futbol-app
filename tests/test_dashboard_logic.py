@@ -156,3 +156,29 @@ def test_build_live_snapshot_keys_and_consistency():
     assert abs_edges == sorted(abs_edges, reverse=True)
 
     assert snap["best_opportunity"]["edge"] is not None
+
+
+def test_goal_markers_detects_score_changes():
+    series = [
+        {"minute": 10, "home_score": 0, "away_score": 0},
+        {"minute": 20, "home_score": 0, "away_score": 0},
+        {"minute": 35, "home_score": 1, "away_score": 0},
+        {"minute": 70, "home_score": 1, "away_score": 1},
+    ]
+    markers = logic.goal_markers(series)
+    assert [m["minute"] for m in markers] == [35, 70]
+    assert markers[0]["home_score"] == 1 and markers[0]["away_score"] == 0
+
+
+def test_goal_markers_empty_and_single():
+    assert logic.goal_markers([]) == []
+    assert logic.goal_markers([{"minute": 5, "home_score": 0, "away_score": 0}]) == []
+
+
+def test_market_label():
+    assert logic.market_label("draw") == "Empate"
+    assert logic.market_label("home") == "Local"
+    assert logic.market_label("away") == "Visita"
+    assert logic.market_label("btts") == "BTTS"
+    assert logic.market_label("over_2.5") == "Over 2.5"
+    assert logic.market_label("desconocido") == "desconocido"
