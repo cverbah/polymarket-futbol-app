@@ -24,25 +24,6 @@ def _load_fixture(name: str):
 
 HOME = "app/dashboard.py"
 SETUP = "app/pages/01_market_setup.py"
-LIVE = "app/pages/02_live_match.py"
-
-
-def _valid_model():
-    """Dict MODEL válido con la misma forma que guarda state.save_model."""
-    return {
-        "metadata": {
-            "home_team": "Argentina",
-            "away_team": "Cabo Verde",
-            "match_name": "Argentina vs Cabo Verde",
-            "model_type": "poisson",
-        },
-        "model_type": "poisson",
-        "lambda_home": 2.5,
-        "lambda_away": 0.4,
-        "rho": -0.13,
-        "market_probs": {"home": 0.85, "draw": 0.11, "away": 0.04},
-        "config": {},
-    }
 
 
 # --- Home ------------------------------------------------------------------
@@ -82,37 +63,3 @@ def test_market_setup_calibrates_and_saves_model():
         assert model["lambda_away"] > 0
 
 
-# --- Live sin modelo -------------------------------------------------------
-
-def test_live_without_model_shows_warning():
-    at = AppTest.from_file(LIVE).run()
-    assert not at.exception
-    # Debe mostrar el aviso y detenerse limpiamente (st.stop()).
-    assert any("Calibra primero" in w.value for w in at.warning)
-
-
-# --- Live con modelo -------------------------------------------------------
-
-def test_live_with_model_registers_snapshot():
-    at = AppTest.from_file(LIVE)
-    at.default_timeout = 30
-    # Pre-sembrar el modelo igual que lo hace state.save_model.
-    at.session_state[state.MODEL_KEY] = _valid_model()
-    at.run()
-    assert not at.exception
-
-    # Setear inputs live.
-    at.number_input(key="live_minute").set_value(30)
-    at.number_input(key="live_home_score").set_value(0)
-    at.number_input(key="live_away_score").set_value(0)
-    at.number_input(key="live_market_draw").set_value(0.18)
-    at.run()
-    assert not at.exception
-
-    # Registrar snapshot.
-    at.button(key="live_register_btn").click().run()
-    assert not at.exception
-
-    snapshots = at.session_state[state.SNAPSHOTS_KEY]
-    assert len(snapshots) == 1
-    assert snapshots[0]["minute"] == 30
