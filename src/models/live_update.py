@@ -109,6 +109,41 @@ def _remaining_matrix(lambda_home, lambda_away, model, rho, max_goals):
     return poisson.score_matrix(lambda_home, lambda_away, max_goals)
 
 
+def _matrix_outcome_probs_shifted(matrix, home_score, away_score) -> dict:
+    """1X2 sobre el marcador FINAL = goles restantes (matrix) + marcador (H, A).
+
+    Helper puro reutilizable: dada una matriz de goles RESTANTES y el marcador
+    actual, devuelve P_home / P_draw / P_away del resultado final.
+    """
+    home = draw = away = 0.0
+    n_rows, n_cols = matrix.shape
+    for i in range(n_rows):       # goles restantes home
+        for j in range(n_cols):   # goles restantes away
+            final_home = home_score + i
+            final_away = away_score + j
+            p = matrix[i, j]
+            if final_home > final_away:
+                home += p
+            elif final_home == final_away:
+                draw += p
+            else:
+                away += p
+    return {"home": float(home), "draw": float(draw), "away": float(away)}
+
+
+def remaining_outcome_probs(lambda_home_rem, lambda_away_rem, home_score,
+                            away_score, model="poisson", rho=None,
+                            max_goals=12) -> dict:
+    """1X2 final condicionado al marcador a partir de lambdas RESTANTES dadas.
+
+    A diferencia de `live_outcome_probs`, no aplica el pipeline xG/eventos: toma
+    directamente los lambdas restantes ya determinados (p. ej. los que calibra
+    `calibration.calibrate_remaining`). Reusada por la calibracion live.
+    """
+    matrix = _remaining_matrix(lambda_home_rem, lambda_away_rem, model, rho, max_goals)
+    return _matrix_outcome_probs_shifted(matrix, home_score, away_score)
+
+
 def live_outcome_probs(lambda_home_init, lambda_away_init, state, config,
                        model="poisson", rho=None) -> dict:
     """Probabilidades 1X2 live condicionadas al marcador actual.
@@ -119,22 +154,7 @@ def live_outcome_probs(lambda_home_init, lambda_away_init, state, config,
     max_goals = config["max_goals"]
     adj = adjusted_remaining_lambdas(lambda_home_init, lambda_away_init, state, config)
     matrix = _remaining_matrix(adj["lambda_home"], adj["lambda_away"], model, rho, max_goals)
-
-    H, A = state.home_score, state.away_score
-    home = draw = away = 0.0
-    n_rows, n_cols = matrix.shape
-    for i in range(n_rows):       # goles restantes home
-        for j in range(n_cols):   # goles restantes away
-            final_home = H + i
-            final_away = A + j
-            p = matrix[i, j]
-            if final_home > final_away:
-                home += p
-            elif final_home == final_away:
-                draw += p
-            else:
-                away += p
-    return {"home": float(home), "draw": float(draw), "away": float(away)}
+    return _matrix_outcome_probs_shifted(matrix, state.home_score, state.away_score)
 
 
 def fair_draw_curve(lambda_home_init, lambda_away_init, config,

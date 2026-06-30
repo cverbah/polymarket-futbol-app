@@ -8,6 +8,7 @@ correr para que los wrappers cacheados no opaquen el patch.
 """
 import json
 import os
+from contextlib import contextmanager
 from unittest.mock import patch
 
 import streamlit as st
@@ -36,8 +37,15 @@ def _germany_paraguay_markets():
     return pm.parse_match_markets(main, more, _PM_CONFIG)
 
 
-def _run_patched():
-    """Corre la pagina con las funciones de red parcheadas (sin red)."""
+@contextmanager
+def _patched():
+    """Corre la pagina con las funciones de red parcheadas (sin red).
+
+    Es un context manager (no una funcion que retorna) para que el patch siga
+    activo durante interacciones posteriores del test (ej. seleccionar otro
+    partido y volver a correr); de lo contrario el segundo `.run()` pegaria a la
+    red real.
+    """
     st.cache_data.clear()  # evita que los wrappers cacheados opaquen el patch
     matches = _match_list()
     markets = _germany_paraguay_markets()
@@ -46,43 +54,44 @@ def _run_patched():
         at = AppTest.from_file(SETUP)
         at.default_timeout = 30
         at.run()
-        return at, matches, markets
+        yield at, matches, markets
 
 
 def test_page_runs_without_exception():
-    at, _, _ = _run_patched()
-    assert not at.exception
+    with _patched() as (at, _, _):
+        assert not at.exception
 
 
 def test_selecting_match_saves_compatible_model_and_renders_mvm():
-    at, matches, markets = _run_patched()
-    assert not at.exception
+    with _patched() as (at, matches, markets):
+        assert not at.exception
 
-    # Selecciona Germany vs Paraguay (slug del fixture) y vuelve a correr.
-    target = next(m for m in matches if m.slug == "fifwc-ger-par-2026-06-29")
-    at.selectbox(key="setup_match_select").set_value(target).run()
-    assert not at.exception
+        # Selecciona Germany vs Paraguay (slug del fixture) y vuelve a correr
+        # (el patch sigue activo dentro del with -> sin red).
+        target = next(m for m in matches if m.slug == "fifwc-ger-par-2026-06-29")
+        at.selectbox(key="setup_match_select").set_value(target).run()
+        assert not at.exception
 
-    # session_state contiene un modelo con forma compatible con Live Match.
-    model = at.session_state[state.MODEL_KEY]
-    assert model is not None
-    assert "lambda_home" in model and model["lambda_home"] > 0
-    assert "lambda_away" in model and model["lambda_away"] > 0
-    assert "rho" in model
-    assert model["model_type"] in ("dixon_coles", "poisson")
-    assert model["metadata"]["home_team"] == "Germany"
-    assert model["metadata"]["away_team"] == "Paraguay"
-    assert model["metadata"]["match_name"] == "Germany vs Paraguay"
-    # Favorito fuerte: Germany (precio ~0.715) => lambda local > visita.
-    assert model["lambda_home"] > model["lambda_away"]
+        # session_state contiene un modelo con forma compatible con Live Match.
+        model = at.session_state[state.MODEL_KEY]
+        assert model is not None
+        assert "lambda_home" in model and model["lambda_home"] > 0
+        assert "lambda_away" in model and model["lambda_away"] > 0
+        assert "rho" in model
+        assert model["model_type"] in ("dixon_coles", "poisson")
+        assert model["metadata"]["home_team"] == "Germany"
+        assert model["metadata"]["away_team"] == "Paraguay"
+        assert model["metadata"]["match_name"] == "Germany vs Paraguay"
+        # Favorito fuerte: Germany (precio ~0.715) => lambda local > visita.
+        assert model["lambda_home"] > model["lambda_away"]
 
-    # La seccion Modelo vs Mercado se renderizo (dataframe presente).
-    assert len(at.dataframe) >= 1
+        # La seccion Modelo vs Mercado se renderizo (dataframe presente).
+        assert len(at.dataframe) >= 1
 
 
 def test_default_model_is_dixon_coles():
-    at, _, _ = _run_patched()
-    assert not at.exception
-    # El radio default es Dixon-Coles -> el modelo guardado es dixon_coles.
-    model = at.session_state[state.MODEL_KEY]
-    assert model["model_type"] == "dixon_coles"
+    with _patched() as (at, _, _):
+        assert not at.exception
+        # El radio default es Dixon-Coles -> el modelo guardado es dixon_coles.
+        model = at.session_state[state.MODEL_KEY]
+        assert model["model_type"] == "dixon_coles"

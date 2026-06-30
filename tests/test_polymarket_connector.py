@@ -6,12 +6,15 @@ import pytest
 
 from src.connectors.polymarket import (
     GammaClient,
+    LiveState,
     MarketQuote,
     MatchMarkets,
     MatchSummary,
     PolymarketError,
     get_match_markets,
     list_world_cup_matches,
+    parse_espn_scoreboard,
+    parse_live_state,
     parse_match_list,
     parse_match_markets,
     parse_more_markets,
@@ -212,6 +215,107 @@ def test_list_world_cup_matches_with_injected_client(events_list, config):
     matches = list_world_cup_matches(client=_ListClient(), config=full_config)
     assert len(matches) == 14
     assert all(isinstance(m, MatchSummary) for m in matches)
+
+
+# --------------------------------------------------------------------------- #
+# Estado live: parse_live_state sobre los 4 fixtures del partido
+# --------------------------------------------------------------------------- #
+def test_parse_live_state_main_in_play():
+    event = _load("wc_match_main.json")[0]
+    live = parse_live_state(event)
+    assert isinstance(live, LiveState)
+    assert live.status == "in"
+    assert live.is_live is True
+    assert live.minute == 13
+    assert (live.home_score, live.away_score) == (0, 0)
+
+
+def test_parse_live_state_live_scored():
+    event = _load("wc_match_live_scored.json")[0]
+    live = parse_live_state(event)
+    assert live.status == "in"
+    assert live.is_live is True
+    assert live.minute == 70
+    assert (live.home_score, live.away_score) == (1, 1)
+
+
+def test_parse_live_state_pre():
+    event = _load("wc_match_pre.json")[0]
+    live = parse_live_state(event)
+    assert live.status == "pre"
+    assert live.is_live is False
+    assert live.minute is None
+    assert live.home_score is None
+    assert live.away_score is None
+
+
+def test_parse_live_state_post():
+    event = _load("wc_match_post.json")[0]
+    live = parse_live_state(event)
+    assert live.status == "post"
+    assert live.is_live is False
+    assert (live.home_score, live.away_score) == (2, 1)
+
+
+def test_parse_live_state_halftime():
+    # Defensivo: period HT -> 'halftime'.
+    live = parse_live_state({"live": True, "period": "HT", "score": "1-0", "elapsed": "45"})
+    assert live.status == "halftime"
+    assert live.is_live is True
+    assert (live.home_score, live.away_score) == (1, 0)
+
+
+def test_parse_live_state_empty_event():
+    live = parse_live_state({})
+    assert live.status == "pre"
+    assert live.is_live is False
+    assert live.minute is None
+
+
+def test_match_markets_populates_live(main_event, more_event, config):
+    mm = parse_match_markets(main_event, more_event, config)
+    assert isinstance(mm.live, LiveState)
+    assert mm.live.status == "in"
+    assert mm.live.is_live is True
+    assert mm.live.minute == 13
+    assert (mm.live.home_score, mm.live.away_score) == (0, 0)
+
+
+def test_get_match_markets_live_via_injected_client(more_event, config):
+    live_main = _load("wc_match_live_scored.json")[0]
+    client = _FakeClient(live_main, more_event)
+    mm = get_match_markets("fifwc-live", client=client, config=config)
+    assert mm.live.status == "in"
+    assert (mm.live.home_score, mm.live.away_score) == (1, 1)
+    assert mm.live.minute == 70
+
+
+# --------------------------------------------------------------------------- #
+# Fallback ESPN: parse_espn_scoreboard (parser puro)
+# --------------------------------------------------------------------------- #
+def test_parse_espn_scoreboard_in_play():
+    scoreboard = _load("espn_wc_scoreboard.json")
+    live = parse_espn_scoreboard(scoreboard, "Germany", "Paraguay")
+    assert live is not None
+    assert live.status == "in"
+    assert live.is_live is True
+    assert (live.home_score, live.away_score) == (1, 1)
+    # clock 3660s -> 61 min
+    assert live.minute == pytest.approx(61.0, abs=0.5)
+
+
+def test_parse_espn_scoreboard_not_found():
+    scoreboard = _load("espn_wc_scoreboard.json")
+    assert parse_espn_scoreboard(scoreboard, "Argentina", "France") is None
+
+
+def test_parse_espn_scoreboard_post():
+    scoreboard = _load("espn_wc_scoreboard.json")
+    live = parse_espn_scoreboard(scoreboard, "Brazil", "Japan")
+    assert live is not None
+    assert live.status == "post"
+    assert live.is_live is False
+    assert (live.home_score, live.away_score) == (2, 1)
 
 
 # --------------------------------------------------------------------------- #

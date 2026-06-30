@@ -103,6 +103,64 @@ def first_to_score(lambda_home: float, lambda_away: float) -> dict:
     }
 
 
+def final_score_matrix(
+    remaining_matrix: np.ndarray,
+    home_score: int,
+    away_score: int,
+    max_goals: int,
+) -> np.ndarray:
+    """Matriz del marcador FINAL = goles restantes desplazados por (H, A).
+
+    final[min(H+i, max_goals), min(A+j, max_goals)] += remaining_matrix[i, j].
+    La masa que excederia la grilla se acumula en el borde `max_goals`. Sobre
+    esta matriz, toda la analitica existente (one_x_two, total_goals_distribution,
+    over_under, btts, clean_sheets, winning_margin, top_scores, double_chance) da
+    el numero correcto del *resultado final*.
+    """
+    final = np.zeros((max_goals + 1, max_goals + 1))
+    n_rows, n_cols = remaining_matrix.shape
+    for i in range(n_rows):
+        fi = min(home_score + i, max_goals)
+        for j in range(n_cols):
+            fj = min(away_score + j, max_goals)
+            final[fi, fj] += remaining_matrix[i, j]
+    return final
+
+
+def next_to_score(lambda_home_rem: float, lambda_away_rem: float) -> dict:
+    """Proximo equipo en anotar (misma formula que first_to_score, sobre los
+    lambdas RESTANTES). none = exp(-(lh_rem + la_rem)). Los tres suman 1.
+
+    La pagina lo rotula "primer gol" si va 0-0 o "proximo en anotar" si ya
+    hubo goles (el orden real del primer gol no es recuperable del marcador).
+    """
+    return first_to_score(lambda_home_rem, lambda_away_rem)
+
+
+def expected_goals_live(
+    home_score: int,
+    away_score: int,
+    lambda_home_rem: float,
+    lambda_away_rem: float,
+) -> dict:
+    """Desglose de goles esperados live: marcados + restantes + total proyectado.
+
+    home_total = H + lambda_home_rem; away_total = A + lambda_away_rem;
+    total = H + A + lambda_home_rem + lambda_away_rem.
+    """
+    home_total = home_score + lambda_home_rem
+    away_total = away_score + lambda_away_rem
+    return {
+        "home_scored": float(home_score),
+        "away_scored": float(away_score),
+        "home_remaining": float(lambda_home_rem),
+        "away_remaining": float(lambda_away_rem),
+        "home_total": float(home_total),
+        "away_total": float(away_total),
+        "total": float(home_total + away_total),
+    }
+
+
 def winning_margin(matrix: np.ndarray) -> dict:
     """Margen de victoria desde las diagonales de la matriz.
 

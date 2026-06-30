@@ -1,7 +1,8 @@
 """Tests de calibracion (spec maestro seccion 7, 20.1)."""
 import pytest
 
-from src.models import calibration, poisson
+from src.models import calibration, live_update, poisson
+from src.utils.config import load_config
 
 
 def test_normalize_prices():
@@ -67,3 +68,57 @@ def test_calibrate_dixon_coles_with_over_frees_rho():
     assert result["success"]
     # rho calibrado puede diferir del default.
     assert -1.0 <= result["rho"] <= 1.0
+
+
+# --- Calibracion live: lambdas restantes condicionados al marcador ---------
+
+
+def test_calibrate_remaining_round_trip():
+    """Round-trip: dados lambdas restantes y un marcador, calcular el 1X2
+    condicionado, realimentarlo y recuperar los lambdas dentro de tolerancia."""
+    cfg = load_config()
+    model = "dixon_coles"
+    rho = cfg["default_rho"]
+    H, A = 1, 1
+    true_lh_rem, true_la_rem = 1.4, 0.9
+
+    target = live_update.remaining_outcome_probs(
+        true_lh_rem, true_la_rem, H, A, model=model, rho=rho,
+        max_goals=cfg["max_goals"],
+    )
+
+    result = calibration.calibrate_remaining(
+        target, home_score=H, away_score=A, model=model, rho=rho, config=cfg
+    )
+    assert result["success"]
+    for key in ("lambda_home_remaining", "lambda_away_remaining", "rho", "loss", "success"):
+        assert key in result
+
+    # Recupera los lambdas verdaderos.
+    assert abs(result["lambda_home_remaining"] - true_lh_rem) < 0.05
+    assert abs(result["lambda_away_remaining"] - true_la_rem) < 0.05
+
+    # Reproduce las probabilidades objetivo.
+    recovered = live_update.remaining_outcome_probs(
+        result["lambda_home_remaining"], result["lambda_away_remaining"],
+        H, A, model=model, rho=rho, max_goals=cfg["max_goals"],
+    )
+    for k in ("home", "draw", "away"):
+        assert abs(recovered[k] - target[k]) < 1e-3
+
+
+def test_calibrate_remaining_at_0_0_matches_prematch():
+    """Con (H, A) = (0, 0), los lambdas restantes ~ los lambdas full que
+    encuentra la calibracion pre-partido para el mismo target (direccional)."""
+    cfg = load_config()
+    target = calibration.normalize_prices(0.55, 0.27, 0.18)
+
+    pre = calibration.calibrate(target, model="dixon_coles", config=cfg)
+    live = calibration.calibrate_remaining(
+        target, home_score=0, away_score=0, model="dixon_coles", config=cfg
+    )
+
+    assert live["success"]
+    # Tolerancia laxa: misma estructura, debe quedar cerca del full-match lambda.
+    assert abs(live["lambda_home_remaining"] - pre["lambda_home"]) < 0.15
+    assert abs(live["lambda_away_remaining"] - pre["lambda_away"]) < 0.15

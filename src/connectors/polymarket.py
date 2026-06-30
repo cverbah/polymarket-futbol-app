@@ -41,11 +41,21 @@ class MatchSummary:
 
 
 @dataclass
+class LiveState:
+    is_live: bool             # de `live` == True
+    status: str               # "pre" | "in" | "halftime" | "post"
+    minute: Optional[float]   # de `elapsed`
+    home_score: Optional[int] # de `score` "1-1" -> 1
+    away_score: Optional[int] # -> 1
+
+
+@dataclass
 class MatchMarkets:
     summary: MatchSummary
     one_x_two: dict  # {"home": MarketQuote, "draw": MarketQuote, "away": MarketQuote}
     over_under: dict  # {2.5: MarketQuote, ...} con name="over_2.5" y price=Over
     btts: Optional[MarketQuote]  # name="btts", price=Yes
+    live: "LiveState" = field(default_factory=lambda: LiveState(False, "pre", None, None, None))
     quality_flags: list = field(default_factory=list)  # OK / LOW_LIQUIDITY / HIGH_SPREAD
 
 
@@ -200,6 +210,52 @@ def _quality_flags_for(quote: Optional[MarketQuote], max_spread: float, min_liqu
     return flags or ["OK"]
 
 
+def _parse_score(score) -> tuple:
+    """De '"H-A"' (ej. '1-1') devuelve (home_int, away_int) o (None, None)."""
+    if not isinstance(score, str) or "-" not in score:
+        return None, None
+    parts = score.split("-", 1)
+    home = _to_float(parts[0].strip())
+    away = _to_float(parts[1].strip())
+    if home is None or away is None:
+        return None, None
+    return int(home), int(away)
+
+
+def parse_live_state(event_json: dict) -> LiveState:
+    """Estado live (minuto + marcador) desde el evento Gamma. Parser PURO.
+
+    Mapeo de `period`: 1H/2H -> 'in', HT -> 'halftime', VFT/FT -> 'post'.
+    Si `live` es falsy/None y no hay periodo en juego -> 'pre'.
+    `is_live` solo si `live` es exactamente True.
+    """
+    event_json = event_json or {}
+    is_live = event_json.get("live") is True
+
+    period = (event_json.get("period") or "").strip().upper()
+    if period in ("1H", "2H"):
+        status = "in"
+    elif period == "HT":
+        status = "halftime"
+    elif period in ("VFT", "FT"):
+        status = "post"
+    else:
+        status = "in" if is_live else "pre"
+
+    home_score, away_score = _parse_score(event_json.get("score"))
+
+    elapsed = event_json.get("elapsed")
+    minute = _to_float(elapsed) if elapsed not in (None, "") else None
+
+    return LiveState(
+        is_live=is_live,
+        status=status,
+        minute=minute,
+        home_score=home_score,
+        away_score=away_score,
+    )
+
+
 def parse_match_markets(
     main_json: dict,
     more_json: Optional[dict],
@@ -214,6 +270,7 @@ def parse_match_markets(
     summary = parse_match_summary(main_json)
     one_x_two = parse_main_markets(main_json)
     over_under, btts = parse_more_markets(more_json)
+    live = parse_live_state(main_json)
 
     quality_flags: list = []
     quotes = list(one_x_two.values()) + list(over_under.values())
@@ -234,6 +291,7 @@ def parse_match_markets(
         one_x_two=one_x_two,
         over_under=over_under,
         btts=btts,
+        live=live,
         quality_flags=quality_flags,
     )
 
@@ -353,3 +411,95 @@ def get_match_markets(slug: str, client: Optional[GammaClient] = None,
         more_json = None
 
     return parse_match_markets(main_json, more_json, config)
+
+
+# --------------------------------------------------------------------------- #
+# Fallback ESPN (secundario): scoreboard del Mundial. Parser puro + HTTP fino.
+# --------------------------------------------------------------------------- #
+ESPN_SCOREBOARD_URL = (
+    "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard"
+)
+
+
+def _espn_minute(status: dict) -> Optional[float]:
+    """Minuto live desde el status ESPN: usa `clock` (segundos) o `displayClock`."""
+    clock = _to_float(status.get("clock"))
+    if clock is not None:
+        return clock / 60.0
+    display = status.get("displayClock") or ""
+    # '61'' -> 61 ; '90'+5'' -> 95
+    digits = "".join(ch if ch.isdigit() else " " for ch in str(display)).split()
+    if digits:
+        return float(sum(int(d) for d in digits))
+    return None
+
+
+def _team_matches(name: str, target: str) -> bool:
+    """Match laxo por displayName (substring case-insensitive en cualquier sentido)."""
+    if not name or not target:
+        return False
+    a, b = name.strip().lower(), target.strip().lower()
+    return a in b or b in a
+
+
+def parse_espn_scoreboard(scoreboard_json: dict, home_team: str,
+                          away_team: str) -> Optional[LiveState]:
+    """Del scoreboard ESPN extrae el LiveState del partico home vs away.
+
+    Matchea por `team.displayName` (substring case-insensitive). Devuelve None
+    si no encuentra el emparejamiento. Parser PURO.
+    """
+    state_map = {"pre": "pre", "in": "in", "post": "post"}
+    for event in (scoreboard_json or {}).get("events", []):
+        for comp in event.get("competitions", []) or []:
+            competitors = comp.get("competitors", []) or []
+            home_c = next((c for c in competitors if c.get("homeAway") == "home"), None)
+            away_c = next((c for c in competitors if c.get("homeAway") == "away"), None)
+            if not home_c or not away_c:
+                continue
+            home_name = (home_c.get("team") or {}).get("displayName", "")
+            away_name = (away_c.get("team") or {}).get("displayName", "")
+            if not (_team_matches(home_name, home_team) and _team_matches(away_name, away_team)):
+                continue
+
+            status = comp.get("status", {}) or {}
+            espn_state = ((status.get("type") or {}).get("state") or "").lower()
+            our_status = state_map.get(espn_state, "pre")
+            is_live = espn_state == "in"
+            minute = _espn_minute(status) if is_live else None
+            home_score = _to_float(home_c.get("score"))
+            away_score = _to_float(away_c.get("score"))
+            return LiveState(
+                is_live=is_live,
+                status=our_status,
+                minute=minute,
+                home_score=int(home_score) if home_score is not None else None,
+                away_score=int(away_score) if away_score is not None else None,
+            )
+    return None
+
+
+class EspnClient:
+    """Cliente HTTP fino sobre el scoreboard de ESPN. Aislado para mockear."""
+
+    def __init__(self, url: Optional[str] = None, timeout: float = 15.0):
+        self.url = url or ESPN_SCOREBOARD_URL
+        self.timeout = timeout
+        self._session = requests.Session()
+
+    def get_scoreboard(self) -> dict:
+        resp = self._session.get(self.url, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
+
+
+def espn_live_state(home_team: str, away_team: str,
+                    client: Optional[EspnClient] = None) -> Optional[LiveState]:
+    """Fallback: estado live desde ESPN. Tolera fallos de red -> None."""
+    if client is None:
+        client = EspnClient()
+    try:
+        scoreboard = client.get_scoreboard()
+    except (requests.RequestException, ValueError):
+        return None
+    return parse_espn_scoreboard(scoreboard, home_team, away_team)
