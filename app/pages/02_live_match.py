@@ -39,6 +39,10 @@ home_team = meta.get("home_team", "Local")
 away_team = meta.get("away_team", "Visita")
 st.subheader(meta.get("match_name", "Partido"))
 
+if not slug:
+    st.error("El modelo guardado no tiene slug. Recalibra en Market Setup.")
+    st.stop()
+
 # --- Controles -------------------------------------------------------------
 c1, c2, c3 = st.columns([2, 1, 1])
 with c1:
@@ -145,6 +149,8 @@ def live_panel():
         state.append_live_snapshot(slug, logic.build_live_snapshot(model, mm, cfg))
     elif live.status == "post":
         st.caption("Partido finalizado: auto-refresco detenido.")
+    elif live.status == "halftime":
+        st.caption("Entretiempo: el modelo no se actualiza hasta el reinicio.")
 
     series = state.get_series()
     st.caption(f"Última actualización: {datetime.now():%H:%M:%S} · {len(series)} snapshots")
