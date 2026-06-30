@@ -36,9 +36,19 @@ clean sheets, primer gol, margen, doble oportunidad, top scores) + tabla
 `src/connectors/polymarket.py`; analítica pura en `src/models/analytics.py`.
 Diseño: `docs/superpowers/specs/2026-06-29-polymarket-marketsetup-analytics-design.md`.
 
-Lo demás (mejoras a Live Match, XGProvider real, estrategia/EV/señales, storage
-SQLite, paper trading, backtesting) son entregables posteriores, cada uno con su
-propio ciclo spec → plan → implementación.
+**Entregable D: Market Setup time-aware** ✅ (Fase 3 parcial). La misma página
+detecta el estado del partido desde Polymarket (`mm.live`: minuto/marcador/estado
+desde `live`/`period`/`score`/`elapsed`, con fallback ESPN) y se adapta:
+**pre** (90 min desde 0-0), **live** (calibra λ *restantes* condicionados al
+marcador contra el precio live → "proyección final": goles marcado/restante/total,
+próximo en anotar, BTTS/clean-sheet condicionados) y **post** (marcador final).
+`calibrate_remaining` en `calibration.py`; `final_score_matrix`/`next_to_score`/
+`expected_goals_live` en `analytics.py`. Diseño:
+`docs/superpowers/specs/2026-06-29-time-aware-market-setup-design.md`.
+
+Lo demás (xG live + edge real, mejoras a Live Match, estrategia/EV/señales,
+storage SQLite, paper trading, backtesting) son entregables posteriores, cada uno
+con su propio ciclo spec → plan → implementación.
 
 ## Estructura
 
