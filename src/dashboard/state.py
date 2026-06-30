@@ -22,6 +22,8 @@ import streamlit as st
 # Claves centralizadas de session_state.
 MODEL_KEY = "model"
 SNAPSHOTS_KEY = "snapshots"
+SERIES_KEY = "live_series"
+SERIES_SLUG_KEY = "live_series_slug"
 
 
 def save_model(
@@ -73,3 +75,25 @@ def reset_session() -> None:
     """Limpia el modelo y los snapshots de la sesión."""
     st.session_state.pop(MODEL_KEY, None)
     st.session_state[SNAPSHOTS_KEY] = []
+
+
+def append_live_snapshot(slug: str, snapshot: dict) -> None:
+    """Agrega un snapshot a la serie del partido `slug`.
+
+    Si el slug difiere del de la serie actual, reinicia la serie (se analiza un
+    partido a la vez; cambiar de partido no debe mezclar series).
+    """
+    if st.session_state.get(SERIES_SLUG_KEY) != slug:
+        st.session_state[SERIES_KEY] = []
+        st.session_state[SERIES_SLUG_KEY] = slug
+    st.session_state.setdefault(SERIES_KEY, []).append(snapshot)
+
+
+def get_series() -> list:
+    """Devuelve la serie de snapshots live (vacía si no hay)."""
+    return st.session_state.get(SERIES_KEY, [])
+
+
+def reset_series() -> None:
+    """Limpia la serie de snapshots live."""
+    st.session_state[SERIES_KEY] = []
