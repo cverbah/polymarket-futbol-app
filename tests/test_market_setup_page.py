@@ -88,7 +88,9 @@ def _patched():
 def _all_text(at) -> str:
     """Concatena el texto visible de los elementos comunes para asserts laxos."""
     chunks = []
-    for coll in (at.markdown, at.caption, at.success, at.info, at.warning, at.subheader):
+    for coll in (
+        at.markdown, at.caption, at.success, at.info, at.warning, at.error, at.subheader
+    ):
         for el in coll:
             chunks.append(str(getattr(el, "value", "")))
     return "\n".join(chunks)
@@ -167,6 +169,43 @@ def test_live_scored_renders_projection():
 
 
 # --------------------------------------------------------------------------- #
+# Bug de seleccion: al refrescar la lista NO debe resetear al primer partido
+# --------------------------------------------------------------------------- #
+def test_selection_persists_after_list_refresh():
+    st.cache_data.clear()
+    matches = _match_list()
+    assert len(matches) >= 2
+    target = matches[1]  # un partido que NO es el primero de la lista
+    markets = _germany_paraguay_markets()
+
+    with patch.object(pm, "list_world_cup_matches") as mock_list, \
+            patch.object(pm, "get_match_markets", return_value=markets):
+        mock_list.return_value = matches
+        at = AppTest.from_file(SETUP)
+        at.default_timeout = 30
+        at.run()
+
+        # El usuario elige el segundo partido.
+        at.selectbox[0].select(target.slug).run()
+        assert at.selectbox[0].value == target.slug
+
+        # Simula un refetch real: mismos partidos, distinta liquidez/volumen
+        # (es justo este cambio de valores el que rompia la igualdad por objeto).
+        refreshed = _match_list()
+        for m in refreshed:
+            m.total_liquidity += 50000.0
+            m.total_volume += 50000.0
+        mock_list.return_value = refreshed
+
+        # Click "Actualizar lista" (primer boton de la pagina) -> limpia cache.
+        at.button[0].click().run()
+
+        # La seleccion debe persistir, NO resetear al primer partido.
+        assert at.selectbox[0].value == target.slug
+        assert at.selectbox[0].value != matches[0].slug
+
+
+# --------------------------------------------------------------------------- #
 # PRE-partido: comportamiento de hoy
 # --------------------------------------------------------------------------- #
 def test_pre_match_path_saves_model():
@@ -174,7 +213,8 @@ def test_pre_match_path_saves_model():
         assert not at.exception
 
         text = _all_text(at)
-        assert "Pre-partido" in text
+        # Banner de estado destacado: el partido aun no comienza.
+        assert "Aún no comienza" in text
         assert "EN VIVO" not in text
 
         model = at.session_state[state.MODEL_KEY]
@@ -195,6 +235,8 @@ def test_post_match_shows_finished_message():
         assert not at.exception
 
         text = _all_text(at)
+        # Banner de estado destacado: partido finalizado.
+        assert "Finalizado" in text
         assert "Partido terminado" in text
         # Marcador final 2-1 mostrado.
         assert "2 - 1" in text
