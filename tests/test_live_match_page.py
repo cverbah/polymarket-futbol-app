@@ -151,3 +151,22 @@ def test_live_post_shows_final_and_stops_accumulating():
         except KeyError:
             series_post = []
         assert len(series_post) == 0
+
+
+def test_live_pre_shows_waiting_and_no_accumulation():
+    st.cache_data.clear()
+    markets = _markets("wc_match_pre.json")
+    with patch.object(pm, "get_match_markets", return_value=markets):
+        at = AppTest.from_file(LIVE)
+        at.default_timeout = 30
+        at.session_state[state.MODEL_KEY] = _model()
+        at.run()
+        assert not at.exception
+        text = _all_text(at)
+        assert "Aún no comienza" in text
+        # at.session_state no soporta .get(); se usa subscript con try/except.
+        try:
+            series_pre = at.session_state[state.SERIES_KEY]
+        except KeyError:
+            series_pre = []
+        assert len(series_pre) == 0

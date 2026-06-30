@@ -48,7 +48,7 @@ c1, c2, c3 = st.columns([2, 1, 1])
 with c1:
     auto_on = st.toggle(f"Auto-refresco (cada {_REFRESH}s)", value=True, key="live_auto")
 with c2:
-    st.button("↻ Actualizar ahora", key="live_refresh_now")  # el click ya re-corre el fragmento
+    st.button("↻ Actualizar ahora", key="live_refresh_now")  # el click dispara un rerun completo que vuelve a ejecutar el fragmento
 with c3:
     if st.button("🗑 Reiniciar serie", key="live_reset_series"):
         state.reset_series()
@@ -145,12 +145,12 @@ def live_panel():
     live = mm.live
     _scoreboard(live)
 
-    if live.status in ("in", "halftime") and live.minute is not None:
+    if live.status == "in" and live.minute is not None:
         state.append_live_snapshot(slug, logic.build_live_snapshot(model, mm, cfg))
-    elif live.status == "post":
-        st.caption("Partido finalizado: auto-refresco detenido.")
     elif live.status == "halftime":
         st.caption("Entretiempo: el modelo no se actualiza hasta el reinicio.")
+    elif live.status == "post":
+        st.caption("Partido finalizado: auto-refresco detenido.")
 
     series = state.get_series()
     st.caption(f"Última actualización: {datetime.now():%H:%M:%S} · {len(series)} snapshots")
